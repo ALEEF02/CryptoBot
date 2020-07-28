@@ -2,7 +2,7 @@
 A Discord bot to get information and posts updates on any cryptocurrency
 
 ## Adding to your server
-1. (Click here)[https://discord.com/api/oauth2/authorize?client_id=737464526013989044&permissions=8&scope=bot] to add the bot to your server, no coding required!
+1. [Click here] (https://discord.com/api/oauth2/authorize?client_id=737464526013989044&permissions=8&scope=bot) to add the bot to your server, no coding required!
 
 ## Installation
 If you would like to run your own instance of the bot, use the following steps
