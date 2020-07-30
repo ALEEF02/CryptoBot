@@ -5,8 +5,8 @@ var auth = require('./auth.json');
 var current = {};
 var cooldowns = {};
 var allCoins = [];
-
-const tokens = require('./tokens.json');
+var numServersIn = 0;
+var sleeping = false;
 
 const { Client, ClientPresence, MessageCollector, Util } = require('discord.js');
 const { TOKEN, PREFIX } = require('./config');
@@ -20,20 +20,13 @@ logger.add(new logger.transports.Console, {
 logger.level = 'info';
 
 // Initialize Discord Bot
-client.login(auth.token);
+client.login(TOKEN);
 client.on('warn', logger.warn);
 client.on('error', logger.error);
 client.on('disconnect', () => logger.info('Bot is disconnected!'));
 client.on('reconnecting', () => logger.info('Bot is now reconnecting'));
 client.on('ready', () => {
-	client.user.setPresence({
-		activity: {
-			name: ('on ' + client.guilds.cache.array().length + ' servers'),
-			url: 'https://www.coingecko.com/',
-			type: 3
-		},
-		status: 'online',
-	});
+	updatePresence();
 	logger.info('Getting all current coins...');
 	var xhttp = new XMLHttpRequest();
 	xhttp.onreadystatechange = function() {
@@ -50,6 +43,22 @@ client.on('ready', () => {
 	xhttp.send();
 	logger.info('CryptoBot is ready. Registering message intervals...');
 });
+//Update the server count each time we join or leave a server
+client.on('guildCreate', () => {updatePresence()});
+client.on('guildDelete', () => {updatePresence()});
+
+function updatePresence() {
+	logger.info("Bot either joined or left a server. Previously in " + numServersIn + " servers, now in " + client.guilds.cache.array().length + " servers");
+	numServersIn = client.guilds.cache.array().length;
+	client.user.setPresence({
+		activity: {
+			name: ('on ' + numServersIn + ' servers'),
+			url: 'https://www.coingecko.com/',
+			type: 3
+		},
+		status: 'online',
+	});
+}
 
 client.on('message', msg => {
 	if (msg.author.bot) return undefined;
@@ -59,8 +68,11 @@ client.on('message', msg => {
 	var ms = new Date().getTime();
 	
 	let command = msg.content.toLowerCase().split(' ')[0].slice(PREFIX.length);
+	
+	if (sleeping && command != 'wake') return undefined;
+	
 	var userID = msg.author.id;
-	var isDM = msg.guild ? true : false;
+	var isDM = msg.guild ? false : true;
 	var since = ms - cooldowns[userID];
 	var myMessageID;
 
@@ -86,8 +98,22 @@ client.on('message', msg => {
 		case 'subscribe':
 		case 'add':
 			if (isDM) {
+				msg.channel.send('To prevent overload, this feature is currently not available in DM\'s. Sorry for the inconvenience. If you\'d like to help fund the project, you can donate to me at https://aleef.dev :D');
 				return;
 			}
+			
+			msg.channel.send('This command is currently in the works. Please check back later.');
+			break;
+			
+		case 'unsub':
+		case 'unsubscribe':
+		case 'remove':
+			if (isDM) {
+				msg.channel.send('To prevent overload, this feature is currently not available in DM\'s. Sorry for the inconvenience. If you\'d like to help fund the project, you can donate to me at https://aleef.dev :D');
+				return;
+			}
+			
+			msg.channel.send('This command is currently in the works. Please check back later.');
 			break;
 			
 		case 'current':
@@ -95,7 +121,8 @@ client.on('message', msg => {
 		case 'price':
 		case 'info':
 			if (coinSearch == null || coinSearch == "") {
-				msg.channel.send('Please enter a coin to search after the command.');
+				msg.channel.send('Please enter a coin to search after the command. Example: `|' + command + ' daps`');
+				return;
 			}
 		
 			type(msg.channel, true);
@@ -134,12 +161,14 @@ client.on('message', msg => {
 				});
 				
 				const collector = new MessageCollector(msg.channel, m => m.author.id === msg.author.id);
-				logger.info(collector);
 				collector.on('collect', message => {
-					logger.info("Collector received a message");
-					logger.info(collector);
+					var reply = message.content;
+					if (message.content.startsWith(PREFIX)) {
+						reply = message.content.toLowerCase().split(' ')[0].slice(PREFIX.length);
+					}
+					
 					for (var u = 0; u < possibleCoins.length; u++) {
-						if (message.content.toLowerCase() == possibleCoins[u].symbol) {
+						if (reply.toLowerCase() == possibleCoins[u].symbol) {
 							coinFound = possibleCoins[u].id;
 							u = possibleCoins.length;
 						}
@@ -149,6 +178,9 @@ client.on('message', msg => {
 						msg.channel.send('Could not find a coin or token of that name! Please try refining your search');
 					} else {
 						longReplyMessage.delete();
+						message.delete().catch(error => {
+							logger.error(error);
+						});
 						getInfo(coinFound, msg.channel, msg.author);
 					}
 					
@@ -165,7 +197,7 @@ client.on('message', msg => {
 			break;
 			
 		case 'ping':
-			var temp = type(msg.channel, true);
+			type(msg.channel, true);
 			var xhttp = new XMLHttpRequest();
 			var pingAPI;
 			xhttp.onreadystatechange = function() {
@@ -244,6 +276,20 @@ client.on('message', msg => {
 				msg.channel.send('Shutting down...').then(m => {
 					client.destroy();
 				});
+			}
+			break;
+			
+		case 'sleep':
+			if (userID == '222916536300470272') {
+				sleeping = true;
+				msg.channel.send('Will now ignore all incoming messages...');
+			}
+			break;
+			
+		case 'wake':
+			if (userID == '222916536300470272') {
+				sleeping = false;
+				msg.channel.send('Will now begin responding to messages...');
 			}
 			break;
 	}
