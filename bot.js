@@ -48,7 +48,7 @@ client.on('ready', () => {
 		var errors = 0;
 		data = JSON.parse(data);
 		for (var s = 0; s < data.length; s++) {
-			allTimeouts.push(client.setInterval(function() {getInfo()}, data[s].interval, data[s].coinID, client.channels.cache.get(data[s].channel), null, client.guilds.cache.get(data[s].guild)));
+			allTimeouts.push(client.setInterval(getInfo, data[s].interval, data[s].coinID, client.channels.cache.get(data[s].channel), null, client.guilds.cache.get(data[s].guild)));
 			getInfo(data[s].coinID, client.channels.cache.get(data[s].channel), null, client.guilds.cache.get(data[s].guild));
 		}
 		logger.info('Registered ' + (data.length - errors) + ' subscriptions with ' + errors + ' errors');
@@ -106,11 +106,6 @@ client.on('message', msg => {
 	const args = msg.content.toLowerCase().split(' ');
 	const coinSearch = args[1] ? args[1].toLowerCase() : '';
 	var interval = args[2] ? args[2].toLowerCase() : '';
-
-	function findCoinID() {
-		
-	}
-
 
 	switch(command) {
 		case 'sub':
@@ -223,7 +218,7 @@ client.on('message', msg => {
 							
 							var ss = interval > 1 ? 's' : '';
 							
-							client.setInterval(function() {getInfo()}, (interval * 3600000), coinFound, msg.channel, null, msg.guild);
+							client.setInterval(getInfo, (interval * 3600000), coinFound, msg.channel, null, msg.guild);
 							
 							msg.channel.send('I will now send updates on `' + coinFound + '` every ' + interval + ' hour' + ss + ' to this channel');
 						});
