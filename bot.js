@@ -1,10 +1,12 @@
 var Discord = require('discord.io');
 var XMLHttpRequest  = require('xmlhttprequest').XMLHttpRequest;
 var logger = require('winston');
+var fs = require('fs');
 var auth = require('./auth.json');
 var current = {};
 var cooldowns = {};
 var allCoins = [];
+var allTimeouts = [];
 var numServersIn = 0;
 var sleeping = false;
 
@@ -41,8 +43,20 @@ client.on('ready', () => {
 	};
 	xhttp.open("GET", "https://api.coingecko.com/api/v3/coins/list", true);
 	xhttp.send();
-	logger.info('CryptoBot is ready. Registering message intervals...');
+	logger.info('Registering message intervals...');
+	fs.readFile('subs.json', function(err, data) {
+		var errors = 0;
+		data = JSON.parse(data);
+		for (var s = 0; s < data.length; s++) {
+			allTimeouts.push(client.setInterval(function() {getInfo()}, data[s].interval, data[s].coinID, client.channels.cache.get(data[s].channel), null, client.guilds.cache.get(data[s].guild)));
+			getInfo(data[s].coinID, client.channels.cache.get(data[s].channel), null, client.guilds.cache.get(data[s].guild));
+		}
+		logger.info('Registered ' + (data.length - errors) + ' subscriptions with ' + errors + ' errors');
+	});
+  
+	logger.info('CryptoBot is ready.');
 });
+
 //Update the server count each time we join or leave a server
 client.on('guildCreate', () => {updatePresence()});
 client.on('guildDelete', () => {updatePresence()});
@@ -91,7 +105,12 @@ client.on('message', msg => {
 
 	const args = msg.content.toLowerCase().split(' ');
 	const coinSearch = args[1] ? args[1].toLowerCase() : '';
-	const url = args[1] ? args[1].replace(/<(.+)>/g, '$1') : '';
+	var interval = args[2] ? args[2].toLowerCase() : '';
+
+	function findCoinID() {
+		
+	}
+
 
 	switch(command) {
 		case 'sub':
@@ -102,7 +121,153 @@ client.on('message', msg => {
 				return;
 			}
 			
-			msg.channel.send('This command is currently in the works. Please check back later.');
+			if (interval < 1 || interval > 168) {
+				msg.channel.send('Please choose an interval between 1 hour and 1 week (168 hours)');
+				return;
+			}
+			
+			//Begin coin search
+			if (coinSearch == null || coinSearch == "" || !isNaN(coinSearch)) {
+				msg.channel.send('Please enter a coin to search after the command. Example: `|' + command + ' daps 1`');
+				return;
+			}
+		
+			type(msg.channel, true);
+			msg.channel.send('Searching for coin...').then(message => {
+				return clearMessage(null, message);
+			});
+			
+			var coinFound;
+			var possibleCoins = [];
+			
+			for (var i = 0; i < allCoins.length; i++) {
+				if (allCoins[i].symbol.includes(coinSearch) || allCoins[i].name.toLowerCase().includes(coinSearch) || allCoins[i].id.toLowerCase().includes(coinSearch)) {
+					possibleCoins.push(allCoins[i]);
+				}
+			}
+			
+			type(msg.channel, false);
+			
+			if (possibleCoins.length == 0) {
+				msg.channel.send('Could not find a coin or token of that name! Please try refining your search');
+				return;
+			} else if (possibleCoins.length >= 2) {
+				var replyMultiple = 'Found multiple coins with that name. Please reply with one of the following coins.```';
+				for (var e = 0; e < possibleCoins.length; e++) {
+					if (e == possibleCoins.length - 1) {
+						replyMultiple += (possibleCoins[e].symbol + '```');
+					} else {
+						replyMultiple += (possibleCoins[e].symbol + '\n');
+					}
+				}
+				
+				var longReplyMessage;
+				
+				msg.channel.send(replyMultiple).then(message => {
+					longReplyMessage = message;
+				});
+				
+				const collector = new MessageCollector(msg.channel, m => m.author.id === msg.author.id);
+				collector.on('collect', message => {
+					type(msg.channel, true);
+					var reply = message.content;
+					if (message.content.startsWith(PREFIX)) {
+						reply = message.content.toLowerCase().split(' ')[0].slice(PREFIX.length);
+					}
+					
+					for (var u = 0; u < possibleCoins.length; u++) {
+						if (reply.toLowerCase() == possibleCoins[u].symbol) {
+							coinFound = possibleCoins[u].id;
+							u = possibleCoins.length;
+						}
+					}
+					
+					if (coinFound == null) {
+						msg.channel.send('Could not find a coin or token of that name! Please try refining your search');
+						return;
+					} else {
+						longReplyMessage.delete();
+						message.delete().catch(error => {
+							logger.error(error);
+						});
+					}
+					
+					collector.stop();
+			
+					var dataToWrite;
+					
+					fs.readFile('subs.json', function(err, data) {
+						dataToWrite = JSON.parse(data);
+						for (var s = 0; s < dataToWrite.length; s++) {
+							if (dataToWrite[s].coinID == coinFound && client.channels.cache.get(dataToWrite[s].channel).id == msg.channel.id) {
+								msg.channel.send('This channel is already subscribed to `' + coinFound + '`');
+								return;
+							}
+						}
+						
+						logger.info(coinFound);
+						
+						dataToWrite.push({
+							coinID: coinFound,
+							channel: msg.channel.id,
+							guild: msg.guild.id,
+							interval: (interval * 3600000)
+						});
+						
+						fs.writeFile('subs.json', JSON.stringify(dataToWrite), function (error) {
+							type(msg.channel, false);
+							if (error) {
+								logger.error(err);
+								return;
+							}
+							
+							var ss = interval > 1 ? 's' : '';
+							
+							client.setInterval(function() {getInfo()}, (interval * 3600000), coinFound, msg.channel, null, msg.guild);
+							
+							msg.channel.send('I will now send updates on `' + coinFound + '` every ' + interval + ' hour' + ss + ' to this channel');
+						});
+					});
+				});
+			} else {
+				coinFound = possibleCoins[0].id;
+				
+				var dataToWrite;
+				
+				fs.readFile('subs.json', function(err, data) {
+					dataToWrite = JSON.parse(data);
+					for (var s = 0; s < dataToWrite.length; s++) {
+						if (dataToWrite[s].coinID == coinFound && client.channels.cache.get(dataToWrite[s].channel).id == msg.channel.id) {
+							msg.channel.send('This channel is already subscribed to `' + coinFound + '`');
+							return;
+						}
+					}
+					
+					logger.info(coinFound);
+					
+					dataToWrite.push({
+						coinID: coinFound,
+						channel: msg.channel.id,
+						guild: msg.guild.id,
+						interval: (interval * 3600000)
+					});
+					
+					fs.writeFile('subs.json', JSON.stringify(dataToWrite), function (error) {
+						if (error) {
+							logger.error(err);
+							return;
+						}
+						
+						var ss = interval > 1 ? 's' : '';
+						
+						client.setInterval(function() {getInfo()}, (interval * 3600000), coinFound, msg.channel, null, msg.guild);
+						
+						msg.channel.send('I will now send updates on `' + coinFound + '` every `' + interval + '` hour' + ss + ' to this channel');
+					});
+				});
+			}
+			// End coin search
+			
 			break;
 			
 		case 'unsub':
@@ -113,13 +278,59 @@ client.on('message', msg => {
 				return;
 			}
 			
-			msg.channel.send('This command is currently in the works. Please check back later.');
+			if (coinSearch == null || coinSearch == "" || !isNaN(coinSearch)) {
+				msg.channel.send('Please enter a coin to remove after the command. Example: `|' + command + ' daps`');
+				return;
+			}
+			
+			var dataToWrite;
+			
+			fs.readFile('subs.json', function(err, data) {
+				dataToWrite = JSON.parse(data);
+				var found = false;
+				
+				for (var s = 0; s < dataToWrite.length; s++) {
+					if (dataToWrite[s].coinID == coinSearch && client.channels.cache.get(dataToWrite[s].channel).id == msg.channel.id) {
+						found = s;
+					}
+				}
+				
+				if (found == false) {
+					var replyMultiple = 'Could not find a coin named `' + coinSearch + '` to unsubscribe from in this channel. Current channel subscriptions:```\n';
+					for (var e = 0; e < dataToWrite.length; e++) {
+						if (e == dataToWrite.length - 1) {
+							replyMultiple += (dataToWrite[e].coinID + '```');
+						} else {
+							replyMultiple += (dataToWrite[e].coinID + '\n');
+						}
+					}
+					
+					msg.channel.send(replyMultiple);
+					
+					return;
+				}
+				
+				dataToWrite.splice(found, found+1);
+				
+				fs.writeFile('subs.json', JSON.stringify(dataToWrite), function (error) {
+					if (error) {
+						logger.error(err);
+						return;
+					}
+					
+					client.clearInterval(allTimeouts[found]);
+					allTimeouts.splice(found, found+1);
+					msg.channel.send('I will no longer send updates on `' + coinSearch + '` to this channel');
+				});
+			});
+			
 			break;
 			
 		case 'current':
 		case 'now':
 		case 'price':
 		case 'info':
+			//I tried combining this command with add & remove, but the function would end before the event listener caught a reply. This would only be possible with async/await, but I believe that to be impossible because we are already inside of an event listener
 			if (coinSearch == null || coinSearch == "") {
 				msg.channel.send('Please enter a coin to search after the command. Example: `|' + command + ' daps`');
 				return;
@@ -181,13 +392,13 @@ client.on('message', msg => {
 						message.delete().catch(error => {
 							logger.error(error);
 						});
-						getInfo(coinFound, msg.channel, msg.author);
+						getInfo(coinFound, msg.channel, msg.author, null);
 					}
 					
 					collector.stop();
 				});
 			} else {
-				getInfo(possibleCoins[0].id, msg.channel, msg.author);
+				getInfo(possibleCoins[0].id, msg.channel, msg.author, null);
 			}
 			
 			break;
@@ -324,12 +535,17 @@ function numberWithCommas(x) {
     return parts.join(".");
 }
 
-function getInfo(id, channel, requester) {
-	type(channel, true);
+//Gets and posts a coin's current info
+function getInfo(id, channel, requester, guild) {
+	if (requester) {
+		type(channel, true)
+	};
 	var xhttp = new XMLHttpRequest();
 	xhttp.onreadystatechange = function() {
 		if (this.readyState == 4 && this.status == 200) {
-			type(channel, false);
+			if (requester) {
+				type(channel, false);
+			}
 			var coin = JSON.parse(xhttp.responseText);
 			channel.send({
 				embed: {
@@ -339,8 +555,8 @@ function getInfo(id, channel, requester) {
 					"color": 6168410,
 					"timestamp": new Date().toString(),
 					"footer": {
-						"icon_url": requester.avatarURL(),
-						"text": requester.tag
+						"icon_url": requester ? requester.avatarURL() : guild.iconURL(),
+						"text": requester ? requester.tag : guild.name
 					},
 					"thumbnail": {
 						"url": coin.image.large
