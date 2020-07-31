@@ -190,11 +190,13 @@ client.on('message', msg => {
 					collector.stop();
 			
 					var dataToWrite;
+					type(msg.channel, true);
 					
 					fs.readFile('subs.json', function(err, data) {
 						dataToWrite = JSON.parse(data);
 						for (var s = 0; s < dataToWrite.length; s++) {
 							if (dataToWrite[s].coinID == coinFound && client.channels.cache.get(dataToWrite[s].channel).id == msg.channel.id) {
+								type(msg.channel, false);
 								msg.channel.send('This channel is already subscribed to `' + coinFound + '`');
 								return;
 							}
@@ -220,6 +222,7 @@ client.on('message', msg => {
 							
 							client.setInterval(getInfo, (interval * 3600000), coinFound, msg.channel, null, msg.guild);
 							
+							type(msg.channel, false);
 							msg.channel.send('I will now send updates on `' + coinFound + '` every ' + interval + ' hour' + ss + ' to this channel');
 						});
 					});
@@ -228,11 +231,13 @@ client.on('message', msg => {
 				coinFound = possibleCoins[0].id;
 				
 				var dataToWrite;
+				type(msg.channel, true);
 				
 				fs.readFile('subs.json', function(err, data) {
 					dataToWrite = JSON.parse(data);
 					for (var s = 0; s < dataToWrite.length; s++) {
 						if (dataToWrite[s].coinID == coinFound && client.channels.cache.get(dataToWrite[s].channel).id == msg.channel.id) {
+							type(msg.channel, false);
 							msg.channel.send('This channel is already subscribed to `' + coinFound + '`');
 							return;
 						}
@@ -255,8 +260,9 @@ client.on('message', msg => {
 						
 						var ss = interval > 1 ? 's' : '';
 						
-						client.setInterval(function() {getInfo()}, (interval * 3600000), coinFound, msg.channel, null, msg.guild);
+						client.setInterval(getInfo, (interval * 3600000), coinFound, msg.channel, null, msg.guild);
 						
+						type(msg.channel, false);
 						msg.channel.send('I will now send updates on `' + coinFound + '` every `' + interval + '` hour' + ss + ' to this channel');
 					});
 				});
@@ -279,10 +285,11 @@ client.on('message', msg => {
 			}
 			
 			var dataToWrite;
+			type(msg.channel, true);
 			
 			fs.readFile('subs.json', function(err, data) {
 				dataToWrite = JSON.parse(data);
-				var found = false;
+				var found = -1;
 				
 				for (var s = 0; s < dataToWrite.length; s++) {
 					if (dataToWrite[s].coinID == coinSearch && client.channels.cache.get(dataToWrite[s].channel).id == msg.channel.id) {
@@ -290,7 +297,7 @@ client.on('message', msg => {
 					}
 				}
 				
-				if (found == false) {
+				if (found == -1) {
 					var replyMultiple = 'Could not find a coin named `' + coinSearch + '` to unsubscribe from in this channel. Current channel subscriptions:```\n';
 					for (var e = 0; e < dataToWrite.length; e++) {
 						if (e == dataToWrite.length - 1) {
@@ -300,6 +307,7 @@ client.on('message', msg => {
 						}
 					}
 					
+					type(msg.channel, false);
 					msg.channel.send(replyMultiple);
 					
 					return;
@@ -315,6 +323,8 @@ client.on('message', msg => {
 					
 					client.clearInterval(allTimeouts[found]);
 					allTimeouts.splice(found, found+1);
+					
+					type(msg.channel, false);
 					msg.channel.send('I will no longer send updates on `' + coinSearch + '` to this channel');
 				});
 			});
