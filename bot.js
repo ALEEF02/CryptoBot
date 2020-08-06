@@ -1,3 +1,4 @@
+"use strict";
 var Discord = require('discord.io');
 var XMLHttpRequest  = require('xmlhttprequest').XMLHttpRequest;
 var logger = require('winston');
@@ -14,6 +15,26 @@ const { Client, ClientPresence, MessageCollector, Util } = require('discord.js')
 const { TOKEN, PREFIX } = require('./config');
 const client = new Client();
 
+function calcOffset() {
+	var offset = 0;
+    var xmlhttp = new XMLHttpRequest();
+    xmlhttp.open("HEAD", "http://www.googleapis.com", false);
+    xmlhttp.send();
+
+    var dateStr = xmlhttp.getResponseHeader('Date');
+    var serverTimeMillisGMT = Date.parse(new Date(Date.parse(dateStr)).toUTCString());
+    var localMillisUTC = new Date().getTime();
+
+	offset = serverTimeMillisGMT - localMillisUTC;
+    return offset;
+}
+
+function getServerTime() {
+    var date = new Date();
+    date.setTime(date.getTime() + calcOffset());
+    return date;
+}
+
 // Configure logger settings
 logger.remove(logger.transports.Console);
 logger.add(new logger.transports.Console, {
@@ -22,39 +43,50 @@ logger.add(new logger.transports.Console, {
 logger.level = 'info';
 
 // Initialize Discord Bot
+logger.info('Establishing a connection to Discord...');
 client.login(TOKEN);
-client.on('warn', logger.warn);
-client.on('error', logger.error);
+client.on('warn', (w) => logger.warn(w));
+client.on('error', (e) => logger.error(e));
 client.on('disconnect', () => logger.info('Bot is disconnected!'));
 client.on('reconnecting', () => logger.info('Bot is now reconnecting'));
 client.on('ready', () => {
+	logger.info('Established a connection to Discord');
 	updatePresence();
+	logger.info('Preconnecting to time server...');
+	var dif = calcOffset();
+	logger.info('Connected to time server. Offset of ' + dif + ' ms');
+	
 	logger.info('Getting all current coins...');
 	var xhttp = new XMLHttpRequest();
 	xhttp.onreadystatechange = function() {
 		if (this.readyState == 4 && this.status == 200) {
-		   allCoins = JSON.parse(xhttp.responseText);
-		   logger.info('Successfully got list of coins!');
-		}
-		
-		if (this.readyState == 4 && (this.status < 200 || this.status >= 300)) {
-			logger.warn('Could not get list of coins!');
+			allCoins = JSON.parse(xhttp.responseText);
+			logger.info('Successfully got list of coins!');
+			logger.info('Registering message intervals...');
+			fs.readFile('subs.json', function(err, data) {
+				var errors = 0;
+				data = JSON.parse(data);
+				for (var s = 0; s < data.length; s++) {
+					try {
+						allTimeouts.push(client.setInterval(getInfo, data[s].interval, data[s].coinID, client.channels.cache.get(data[s].channel), null, client.guilds.cache.get(data[s].guild)));
+						getInfo(data[s].coinID, client.channels.cache.get(data[s].channel), null, client.guilds.cache.get(data[s].guild));
+					} catch (e) {
+						errors++;
+					}
+				}
+				logger.info('Registered ' + (data.length - errors) + ' subscriptions with ' + errors + ' errors');
+				logger.info('CryptoBot is ready.');
+			});
+		} else if (this.readyState == 4 && (this.status >= 500)) {
+			logger.warn('Could not get list of coins! Error' + this.status + '. Waiting for 1 minute to re-request...');
+			client.setTimeout(xhttp.send, 60000);
+		} else if (this.readyState == 4 && (this.status < 500 || this.status >= 300)) {
+			logger.error('Could not get list of coins! Error ' + this.status + '! Halting!');
+			client.destroy();
 		}
 	};
 	xhttp.open("GET", "https://api.coingecko.com/api/v3/coins/list", true);
 	xhttp.send();
-	logger.info('Registering message intervals...');
-	fs.readFile('subs.json', function(err, data) {
-		var errors = 0;
-		data = JSON.parse(data);
-		for (var s = 0; s < data.length; s++) {
-			allTimeouts.push(client.setInterval(getInfo, data[s].interval, data[s].coinID, client.channels.cache.get(data[s].channel), null, client.guilds.cache.get(data[s].guild)));
-			getInfo(data[s].coinID, client.channels.cache.get(data[s].channel), null, client.guilds.cache.get(data[s].guild));
-		}
-		logger.info('Registered ' + (data.length - errors) + ' subscriptions with ' + errors + ' errors');
-	});
-  
-	logger.info('CryptoBot is ready.');
 });
 
 //Update the server count each time we join or leave a server
@@ -77,7 +109,7 @@ function updatePresence() {
 client.on('message', msg => {
 	if (msg.author.bot) return undefined;
 	if (!msg.content.startsWith(PREFIX)) return undefined;
-	var ping = new Date(msg.createdTimestamp).getTime() - new Date().getTime();
+	var ping = (msg.createdAt.getTime() - getServerTime().getTime()) + client.ws.ping;
 	
 	var ms = new Date().getTime();
 	
@@ -113,6 +145,11 @@ client.on('message', msg => {
 		case 'add':
 			if (isDM) {
 				msg.channel.send('To prevent overload, this feature is currently not available in DM\'s. Sorry for the inconvenience. If you\'d like to help fund the project, you can donate to me at https://aleef.dev :D');
+				return;
+			}
+			
+			if (allCoins == []) {
+				msg.channel.send('The CoinGecko API is having issues right now. Please try again later.');
 				return;
 			}
 			
@@ -336,6 +373,11 @@ client.on('message', msg => {
 		case 'price':
 		case 'info':
 			//I tried combining this command with add & remove, but the function would end before the event listener caught a reply. This would only be possible with async/await, but I believe that to be impossible because we are already inside of an event listener
+			if (allCoins == []) {
+				msg.channel.send('The CoinGecko API is having issues right now. Please try again later.');
+				return;
+			}
+			
 			if (coinSearch == null || coinSearch == "") {
 				msg.channel.send('Please enter a coin to search after the command. Example: `|' + command + ' daps`');
 				return;
@@ -409,32 +451,65 @@ client.on('message', msg => {
 			break;
 			
 		case 'invite':
+		case 'inv':
+		case 'join':
+		case 'link':
 			msg.author.send('You can use this link to invite the CryptoBot to your server. Thank you for using CryptoBot!\nhttps://discord.com/api/oauth2/authorize?client_id=737464526013989044&permissions=8&scope=bot');
 			break;
 			
 		case 'ping':
+		case 'status':
 			type(msg.channel, true);
 			var xhttp = new XMLHttpRequest();
 			var pingAPI;
 			xhttp.onreadystatechange = function() {
 				if (this.readyState == 4 && this.status == 200) {
-					pingAPI = new Date().getTime() - pingAPI;
+					pingAPI = getServerTime().getTime() - pingAPI;
 					type(msg.channel, false);
 					msg.channel.send({
 						embed: {
 							"title": ":ping_pong: Pong!",
 							"color": 6168410,
 							"timestamp": new Date().toString(),
+							"footer": {
+								"icon_url": msg.author.avatarURL(),
+								"text": msg.author.tag
+							},
 							"fields": [
 								{
-									"name": ":man_technologist: :arrow_right: :desktop:  ",
-									"value": ping + "ms",
-									"inline": true
-								},
+									"name": ":man_technologist: :arrow_right: <:wumpus:741033749483094066> :arrow_right: :robot:",
+									"value": ping + " ms"
+								}, {
+									"name": ":robot: :arrow_right: <:wumpus:741033749483094066>",
+									"value": client.ws.ping + " ms"
+								}, {
+									"name": ":robot: :arrow_left: :lizard:",
+									"value": pingAPI + " ms"
+								}
+							]
+						}
+					});
+				} else if (this.readyState == 4 && this.status != 200) {
+					type(msg.channel, false);
+					msg.channel.send({
+						embed: {
+							"title": ":ping_pong: Pong!",
+							"color": 6168410,
+							"timestamp": new Date().toString(),
+							"footer": {
+								"icon_url": msg.author.avatarURL(),
+								"text": msg.author.tag
+							},
+							"fields": [
 								{
-									"name": ":desktop: :arrow_left: :lizard:",
-									"value": pingAPI + "ms",
-									"inline": true
+									"name": ":man_technologist: :arrow_right: <:wumpus:741033749483094066> :arrow_right: :robot:",
+									"value": ping + " ms"
+								}, {
+									"name": ":robot: :arrow_right: <:wumpus:741033749483094066>",
+									"value": client.ws.ping + " ms"
+								}, {
+									"name": ":robot: :arrow_left: :lizard:",
+									"value": "Failed! :no_entry_sign:"
 								}
 							]
 						}
@@ -442,7 +517,7 @@ client.on('message', msg => {
 				}
 			};
 			xhttp.open("GET", "https://api.coingecko.com/api/v3/ping", false);
-			pingAPI = new Date().getTime();
+			pingAPI = getServerTime().getTime();
 			xhttp.send();
 			break;
 			
@@ -471,11 +546,11 @@ client.on('message', msg => {
 							"value": "Get current information on a certain coin"
 						},
 						{
-							"name": "`invite`",
+							"name": "`invite/inv/join/link`",
 							"value": "Get a link to invite the bot to your server"
 						},
 						{
-							"name": "`ping`",
+							"name": "`ping/status`",
 							"value": "Check the bot's ping"
 						},
 						{
@@ -543,8 +618,9 @@ function numberWithCommas(x) {
 //Gets and posts a coin's current info
 function getInfo(id, channel, requester, guild) {
 	if (requester) {
-		type(channel, true)
-	};
+		type(channel, true);
+	}
+	
 	var xhttp = new XMLHttpRequest();
 	xhttp.onreadystatechange = function() {
 		if (this.readyState == 4 && this.status == 200) {
